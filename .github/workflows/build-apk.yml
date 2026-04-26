@@ -1,0 +1,158 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Node 20
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Setup Java 17
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # 4. Setup Android SDK
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 5. Cache npm
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      # 6. Cache Gradle
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # 7. Install dependencies
+      - name: Install dependencies
+        run: npm ci
+
+      # 8. Generate Android project via Expo prebuild
+      - name: Expo prebuild (generate android/ folder)
+        run: npx expo prebuild --platform android --clean
+        env:
+          EXPO_NO_TELEMETRY: 1
+
+      # 9. Generate debug keystore for signing (committed strategy)
+      - name: Setup debug keystore
+        run: |
+          mkdir -p android/app
+          if [ -f "debug.keystore" ]; then
+            cp debug.keystore android/app/debug.keystore
+            echo "Using committed debug.keystore"
+          else
+            keytool -genkeypair \
+              -alias androiddebugkey \
+              -keypass android \
+              -keystore android/app/debug.keystore \
+              -storepass android \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -validity 9999 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -v
+            echo "Generated fresh debug.keystore"
+          fi
+
+      # 9b. Configure signing in Gradle (debug keystore for release build)
+      - name: Configure Gradle signing
+        run: |
+          cat >> android/app/build.gradle << 'GRADLE'
+
+          // Debug-signed release build for personal use
+          android {
+            signingConfigs {
+              debugSigned {
+                storeFile file("debug.keystore")
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+              }
+            }
+            buildTypes {
+              release {
+                signingConfig signingConfigs.debugSigned
+              }
+            }
+          }
+          GRADLE
+
+      # 10. Build release APK
+      - name: Build release APK
+        run: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --stacktrace
+        env:
+          JAVA_OPTS: '-Xmx4g -XX:+HeapDumpOnOutOfMemoryError'
+          GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.configureondemand=true'
+
+      # 11. Upload APK as workflow artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformation-tracker-${{ github.sha }}.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      # 12. Create GitHub Release with APK (on version tags only)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Transformation Tracker ${{ github.ref_name }}"
+          body: |
+            ## Transformation Tracker ${{ github.ref_name }}
+
+            Android APK (debug-signed, for personal use only).
+
+            ### Install Instructions
+            1. Download `app-release.apk` below
+            2. On Android: Settings → Security → "Install unknown apps" → enable for your browser/Files app
+            3. Open the downloaded APK and tap Install
+            4. Grant permissions when prompted (camera, notifications, storage)
+
+            ### Data Import from Webapp
+            Export your data from the webapp (Reports tab → Export JSON), then import it in the Android app (Reports screen → Import JSON Backup).
+
+            ### Notes
+            - APK is signed with a debug keystore (personal use only — not Play Store)
+            - Use the same keystore to update without uninstalling (stable identity)
+          files: android/app/build/outputs/apk/release/app-release.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
