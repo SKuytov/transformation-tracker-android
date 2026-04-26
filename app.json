@@ -51,7 +51,6 @@
           "sounds": []
         }
       ],
-      "@react-native-async-storage/async-storage",
       "expo-quick-actions"
     ],
     "scheme": "transformationtracker",

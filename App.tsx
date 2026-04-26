@@ -10,7 +10,7 @@ import { initSeedData } from './src/data/store';
 import { setupNotificationChannel, scheduleAllNotifications, requestNotificationPermissions } from './src/notifications/scheduler';
 import { ensurePhotoDirExists } from './src/data/photos';
 import { store } from './src/data/store';
-import QuickActions from 'expo-quick-actions';
+import * as QuickActions from 'expo-quick-actions';
 import * as Notifications from 'expo-notifications';
 
 export default function App() {
