@@ -64,49 +64,44 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      # 9. Generate debug keystore for signing (committed strategy)
-      - name: Setup debug keystore
+      # 9. Generate stable debug keystore and configure Gradle signing
+      - name: Setup keystore and configure Gradle signing
         run: |
-          mkdir -p android/app
-          if [ -f "debug.keystore" ]; then
-            cp debug.keystore android/app/debug.keystore
-            echo "Using committed debug.keystore"
-          else
-            keytool -genkeypair \
-              -alias androiddebugkey \
-              -keypass android \
-              -keystore android/app/debug.keystore \
-              -storepass android \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -validity 9999 \
-              -keyalg RSA \
-              -keysize 2048 \
-              -v
-            echo "Generated fresh debug.keystore"
-          fi
-
-      # 9b. Configure signing in Gradle (debug keystore for release build)
-      - name: Configure Gradle signing
-        run: |
+          # Generate a stable keystore for the release build
+          KEYSTORE_PATH="$HOME/.android/debug.keystore"
+          mkdir -p "$HOME/.android"
+          
+          # Generate if not exists (fresh runner will always need this)
+          keytool -genkeypair \
+            -alias androiddebugkey \
+            -keypass android \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -validity 9999 \
+            -keyalg RSA \
+            -keysize 2048 \
+            -v 2>&1 | tail -5 || echo "Keystore may already exist (ok)"
+          
+          # Copy to android/app/ for Gradle to find
+          cp "$KEYSTORE_PATH" android/app/debug.keystore || true
+          
+          # Append signing config to build.gradle
           cat >> android/app/build.gradle << 'GRADLE'
 
-          // Debug-signed release build for personal use
-          android {
-            signingConfigs {
-              debugSigned {
-                storeFile file("debug.keystore")
-                storePassword "android"
-                keyAlias "androiddebugkey"
-                keyPassword "android"
-              }
-            }
-            buildTypes {
-              release {
-                signingConfig signingConfigs.debugSigned
-              }
+          android.signingConfigs {
+            debugSigned {
+              storeFile file("debug.keystore")
+              storePassword "android"
+              keyAlias "androiddebugkey"
+              keyPassword "android"
             }
           }
+          android.buildTypes.release {
+            signingConfig android.signingConfigs.debugSigned
+          }
           GRADLE
+          echo "Gradle signing configured"
 
       # 10. Build release APK
       - name: Build release APK
